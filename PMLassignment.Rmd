@@ -1,0 +1,203 @@
+---
+title: "Practical Machine Learning Assignment"
+output: html_document
+---
+
+
+# Summary
+
+The current project intends to build a predictive model able to categorize the barbell lift class, notably from the accelerometers readings.
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement, a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset).
+
+- Borrowed from the Practical Machine Learning assignment excerpt.
+
+
+## Data Used
+
+The training data for this project are available here: 
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+
+The test data are available here: 
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+# Analysis
+
+To build the predictive models, the **caret** package and some of its dependencies will be used.
+
+```{r LoadPacks,message=FALSE}
+
+#Loading the packages necessary to the analysis
+require(caret)
+require(randomForest)
+require(kernlab)
+```
+
+## Getting and Cleaning the Data
+
+```{r DataCleanUp}
+
+
+# Verifies if the testing dataset is present in the folder previously specified, otherwise downloads it.
+if (file.exists("pml-testing.csv")==FALSE){
+        download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile="pml-testing.csv", method="curl")
+}
+
+# Verifies if the training dataset is present in the folder previously specified, otherwise downloads it.
+if (file.exists("pml-training.csv")==FALSE){
+        download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile="pml-training.csv", method="curl")
+}
+
+#loading the testing set data containing the 20 samples to predict
+testing <- read.csv("pml-testing.csv",na.strings = c("NA","","<NA>"))
+#loading the training set data on which to build the model on.
+training <- read.csv("pml-training.csv",na.strings = c("NA","","<NA>"))
+```
+
+Now that the data is in R, we will give it a quick look.
+
+```{r Explore}
+#Proportion of cells that are NA
+sum(is.na(training))/(dim(training)[1]*dim(training)[2])
+
+#proprotion of samples with data in every column/variable
+sum(complete.cases(training))/nrow(training)
+
+#finding all the NA cells
+AllNAs <- lapply(training,is.na)
+
+#Counting the number of NA cells per column
+namesSum <- unlist(lapply(AllNAs,sum))
+summary(namesSum)
+```
+
+The number of cells containing NAs is non-neglectable and thus impacts the observations where all variables have been measured. As the summary shows, the columns containing NAs looks heavily skewed. There are `r length(namesSum[namesSum>0])` columns with `r round((1-sum(complete.cases(training))/nrow(training))*100)` percent of its samples being NAs. Their removal will not impact the quality of the models and will reduce computing time significantly.
+
+```{r Cleaning}
+#removing ID variables stored under X
+testing$X <- NULL
+training$X <- NULL
+
+#removing the problem_id from the test set, as they are of no use.
+testing$problem_id <- NULL
+
+#removing the columns whit more than 1000 NAs in the observations.
+remove <- names(namesSum[(namesSum>1000)==T]) #to be removed
+training2 <- training[,!(names(training) %in% remove)] #removing the columns from training
+testing2 <- testing[,!(names(testing) %in% remove)] #removing the columns from testing
+
+```
+
+
+
+
+## Cross Validation
+
+
+```{r CrossVal}
+#For reproduceability purposes
+set.seed(3452)
+
+#splitting the training dataset with a 60/40 ratio
+inTrain <- createDataPartition(training2$classe,p=.4,list=F)
+#building the training dataset for the model
+train2 <- training2[inTrain,]
+#building the dataset on which the model will be tested
+test2 <- training2[-inTrain,]
+
+#freeing up some memory
+rm(inTrain, training, testing, training2)
+```
+
+
+Before delving into the prediction of the **testing** dataset, the model must first be built and tested on the **training** dataset. To do so, some cross validation will be executed by splitting the **training** dataset into two subsets. This split will randomly allocate 40% of the observations (`r nrow(train2)` obs.) for the models to be trained on, and 60% to validate the accuracy of the model (`r nrow(test2)` obs.). Experiments with this dataset have shown that this number of observations is sufficient to obtain performant models.
+
+On top of that, **caret** uses 25 reps bootstrapping by default, which parameters will be maintained.
+
+## Model Building
+
+After experimenting with various machine learning methods, two have been retained for comparison in order to spare some computation time. As mentionned, both models have been built on the refined subset of the **training** dataset, and using default parameters from the **caret** package.
+
+The two methods retained are linear SVM, as recommended by the [scikit-learn.org flow chart](http://scikit-learn.org/stable/tutorial/machine_learning_map/index.html "ML flow chart"), and a random forest, which has shown its adaptability throughout the lectures.
+
+```{r fitting, message=FALSE,warning=FALSE}
+
+#Random forest algorithm
+foretAlea <- train(classe ~ .,method="rf",train2)
+
+#Linear SVM algorithm
+SVMl <- train(classe ~ .,method="svmLinear",train2)
+
+
+#Out of Sample errors from the models
+OoSErf <- 1 - foretAlea$results$Accuracy[3]
+OoSEsvm <- 1 - SVMl$results$Accuracy
+
+```
+
+### Out of Sample Error expectations
+
+The out of sample error rate is not expected to go up from the ones provided by the two models. Therefore, the following error rates are exepected:
+
+* Linear SVM : `r OoSEsvm`
+* Random Forest: `r OoSErf`
+
+
+
+## Model Selection
+
+### Random Forest
+
+```{r rfValidation}
+
+#final validation random forest
+rfCFM <- confusionMatrix(predict(foretAlea,test2),test2$classe)
+rfCFM
+drfCFM <- data.frame(rfCFM$table)
+
+plotRF <- ggplot(drfCFM)
+plotRF + geom_tile(aes(x=drfCFM$Reference, y=drfCFM$Prediction, fill=drfCFM$Freq)) + scale_x_discrete(name="Actual Class") + 
+  scale_y_discrete(name="Predicted Class") + scale_fill_gradient() + 
+  labs(fill="Normalized\nFrequency", title="Random Forest confusion matrix density")
+```
+
+
+
+### Linear SVM
+
+```{r SVMValidation}
+
+#final validation linear SVM
+svmCFM <- confusionMatrix(predict(SVMl,test2),test2$classe)
+svmCFM
+dsvmCFM <- data.frame(svmCFM$table)
+
+plotSVM <- ggplot(dsvmCFM)
+plotSVM + geom_tile(aes(x=dsvmCFM$Reference, y=dsvmCFM$Prediction, fill=dsvmCFM$Freq)) + scale_x_discrete(name="Actual Class") + 
+  scale_y_discrete(name="Predicted Class") + scale_fill_gradient() + 
+  labs(fill="Normalized\nFrequency",title="Linear SVM confusion matrix density")
+```
+
+
+### Selection Rationale
+
+Given the preceding results and some experimentation with various machine learning algorithms, the random forest proved to be the most efficient. With reasonable computing time (~ 45 minutes) and near perfect accuracy (`r confusionMatrix(predict(foretAlea,test2),test2$classe)$overall[1]`), it outclassed the linear SVM's accuracy (`r confusionMatrix(predict(SVMl,test2),test2$classe)$overall[1]`), and all others previously tried, with the notable exception of the stochastic grandient boosting algorithm ("gbm") which matched its accuracy. These results prove to be in line with the expected out of sample errors previously mentionned, for both the random forest (`r 1-confusionMatrix(predict(foretAlea,test2),test2$classe)$overall[1]`) and the SVM (`r 1-confusionMatrix(predict(SVMl,test2),test2$classe)$overall[1]`).
+
+Despite the considerably lower processing time of the linear SVM, the accuracy compromise compared to the random forest is deemed too large to retain it. Waiting a few more minutes for near perfect accuracy may prove well worth it when meeting new data.
+
+
+## Final Predictions
+
+```{r final call}
+#prediciting the answers with the random forest
+predict(foretAlea,testing2)
+
+#prediciting the answers with the SVM
+predict(SVMl,testing2)
+```
+
+Both make the same predictions on the 20 observations from the **testing** dataset.
